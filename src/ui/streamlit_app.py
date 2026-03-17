@@ -1,12 +1,23 @@
 import streamlit as st
 from src.briefing.generate_briefing import generate_briefing
 from src.briefing.context_builder import build_context
+from src.briefing.chat import ask_question
+
 
 st.set_page_config(page_title="SignalDesk AI", layout="wide")
 
 st.title("SignalDesk AI")
 st.caption("AI & Databricks-powered market, FX, macro, and risk-regime briefing")
 # st.metric("Current Regime:", regime_flag)
+
+st.subheader("Ask SignalDesk")
+
+question = st.text_input("Ask a question about the data")
+
+if st.button("Ask"):
+    with st.spinner("Thinking..."):
+        answer = ask_question(question)
+    st.markdown(answer)
 
 col1, col2 = st.columns([1, 1])
 

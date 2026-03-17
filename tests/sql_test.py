@@ -5,13 +5,20 @@ import os
 
 load_dotenv()
 
-conn = sql.connect(
-    server_hostname=os.getenv("DB_HOST"),
-    http_path=os.getenv("DB_HTTP_PATH"),
-    access_token=os.getenv("DB_TOKEN"),
-)
 
-cursor = conn.cursor()
-cursor.execute("SELECT 1")
+def main() -> None:
+    conn = sql.connect(
+        server_hostname=os.getenv("DB_HOST"),
+        http_path=os.getenv("DB_HTTP_PATH"),
+        access_token=os.getenv("DB_TOKEN"),
+    )
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        print(cursor.fetchall())
+    finally:
+        conn.close()
 
-print(cursor.fetchall())
+
+if __name__ == "__main__":
+    main()
