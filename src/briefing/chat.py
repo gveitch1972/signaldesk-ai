@@ -1,11 +1,14 @@
 from src.foundry_client import get_client
-from src.config import FOUNDRY_MODEL_DEPLOYMENT
+from src.config import FOUNDRY_MODEL_DEPLOYMENT, ENABLE_HEAVY_CONTEXT_FOR_QA
 from src.briefing.context_builder import build_context
 
 
-def ask_question(question: str) -> str:
+def ask_question(question: str, include_heavy: bool | None = None) -> str:
     client = get_client()
-    context = build_context()
+    use_heavy_context = (
+        ENABLE_HEAVY_CONTEXT_FOR_QA if include_heavy is None else include_heavy
+    )
+    context = build_context(include_heavy=use_heavy_context)
 
     response = client.chat.completions.create(
         model=FOUNDRY_MODEL_DEPLOYMENT,
