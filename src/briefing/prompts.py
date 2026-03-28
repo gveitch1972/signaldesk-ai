@@ -9,17 +9,16 @@ Rules:
 - Use bullet points
 - Call out regime shifts clearly
 - Separate facts vs interpretation
+- Anchor claims to concrete datapoints when available (symbol/pair/date/magnitude)
 """
 
 USER_PROMPT_TEMPLATE = """
 Using the structured signal context below, produce:
 
-1. Regime Call (risk-on / risk-off / mixed)
-2. Executive Summary
-3. Top Risks
-4. Top Opportunities
-5. What To Watch Next Week
-
+1. What Changed Today
+2. Why It Changed (use Top Movers + Why when available)
+3. Implications (risk, treasury, advisory)
+4. Actions To Watch Next Week
 
 Context:
 {context}

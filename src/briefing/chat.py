@@ -3,6 +3,13 @@ from src.config import FOUNDRY_MODEL_DEPLOYMENT, ENABLE_HEAVY_CONTEXT_FOR_QA
 from src.briefing.context_builder import build_context
 
 
+QA_SYSTEM_PROMPT = (
+    "You are a senior financial analyst. "
+    "Answer clearly and concisely using the provided data. "
+    "When possible, cite concrete datapoints (symbol/pair/date/magnitude)."
+)
+
+
 def ask_question(question: str, include_heavy: bool | None = None) -> str:
     client = get_client()
     use_heavy_context = (
@@ -15,7 +22,7 @@ def ask_question(question: str, include_heavy: bool | None = None) -> str:
         messages=[
             {
                 "role": "system",
-                "content": "You are a senior financial analyst. Answer clearly and concisely using the provided data.",
+                "content": QA_SYSTEM_PROMPT,
             },
             {
                 "role": "user",

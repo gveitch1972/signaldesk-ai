@@ -4,15 +4,18 @@ SignalDesk AI is a Python 3 app that builds market briefings and question-answer
 
 ## What It Does
 
-The app currently combines:
+The app now combines:
 
 - cross-signal regime context
 - market coverage, breadth, and latest stress signals
 - FX coverage, per-pair history summaries, and the latest FX watchlist
 - macro coverage and the latest macro trend rows
+- top movers explainability from `fin_signals_dev.gold.top_movers_why`
 
 The Streamlit UI supports:
 
+- executive snapshot metrics and data freshness labels
+- top movers plus rationale view
 - asking free-form questions about the loaded data
 - generating an executive briefing
 - showing the raw assembled context sent to the model
@@ -140,6 +143,19 @@ python3 -m tests.context_test
 python3 -m tests.sql_test
 python3 -m tests.gold_query_test
 ```
+
+## Gold Table Dependencies
+
+The app expects these Gold tables:
+- `fin_signals_dev.gold.cross_signal_summary`
+- `fin_signals_dev.gold.daily_market_snapshot`
+- `fin_signals_dev.gold.fx_trend_signals`
+- `fin_signals_dev.gold.macro_indicator_trends`
+- `fin_signals_dev.gold.top_movers_why` (optional; app falls back gracefully if unavailable)
+
+## Fallback Behavior
+
+If one or more queries fail or return empty data, SignalDesk AI renders fallback context text rather than failing the UI flow.
 
 ## Current Limitation
 
