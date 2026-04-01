@@ -1,46 +1,49 @@
 import src.briefing.context_builder as context_builder
 
 
-def test_build_context_fast_mode_avoids_heavy_loaders(monkeypatch):
-    monkeypatch.setattr(context_builder, "load_latest_regime", lambda: [{"risk_regime": "calm"}])
-    monkeypatch.setattr(context_builder, "load_market_breadth", lambda: [{"k": 1}])
-    monkeypatch.setattr(context_builder, "load_market_stress", lambda: [{"k": 1}])
-    monkeypatch.setattr(context_builder, "load_fx_watchlist", lambda: [{"k": 1}])
-    monkeypatch.setattr(context_builder, "load_macro_trends", lambda: [{"k": 1}])
-    monkeypatch.setattr(context_builder, "load_top_movers_why", lambda: [{"k": 1}])
-    monkeypatch.setattr(context_builder, "get_latest_dates", lambda: {"market": "2026-03-25"})
-    monkeypatch.setattr(context_builder, "_load_latest_dates_signature", lambda: ("1", "2", "3", "4"))
+def _base_payload():
+    return {
+        "latest_dates": {
+            "regime_as_of_date": "2026-03-31",
+            "market_snapshot_date": "2026-03-31",
+            "fx_rate_date": "2026-03-31",
+            "movers_as_of_date": "2026-03-31",
+        },
+        "regime": [{"risk_regime": "calm"}],
+        "market_breadth": [{"k": 1}],
+        "market_stress": [{"k": 1}],
+        "fx_watchlist": [{"k": 1}],
+        "macro_trends": [{"k": 1}],
+        "top_movers": [{"symbol": "AAA", "why_summary": "Reason"}],
+        "heavy": {
+            "market_coverage": [{"k": 1}],
+            "fx_coverage": [{"k": 1}],
+            "fx_history_summary": [{"k": 1}],
+            "macro_coverage": [{"k": 1}],
+        },
+    }
 
-    def should_not_run():
-        raise AssertionError("heavy loader should not run")
 
-    monkeypatch.setattr(context_builder, "load_market_coverage", should_not_run)
-    monkeypatch.setattr(context_builder, "load_fx_coverage", should_not_run)
-    monkeypatch.setattr(context_builder, "load_fx_history_summary", should_not_run)
-    monkeypatch.setattr(context_builder, "load_macro_coverage", should_not_run)
+def test_build_context_fast_mode_avoids_heavy_sections(monkeypatch):
+    calls = []
 
+    def fake_run_context_job(include_heavy: bool):
+        calls.append(include_heavy)
+        return _base_payload()
+
+    monkeypatch.setattr(context_builder, "run_context_job", fake_run_context_job)
     context_builder.clear_context_cache()
     result = context_builder.build_context(include_heavy=False, force_refresh=True)
 
+    assert calls == [False]
     assert "TOP MOVERS + WHY" in result
     assert "MARKET COVERAGE" not in result
 
 
-def test_build_context_handles_empty_sources(monkeypatch):
-    monkeypatch.setattr(context_builder, "load_latest_regime", lambda: [])
-    monkeypatch.setattr(context_builder, "load_market_breadth", lambda: [])
-    monkeypatch.setattr(context_builder, "load_market_stress", lambda: [])
-    monkeypatch.setattr(context_builder, "load_fx_watchlist", lambda: [])
-    monkeypatch.setattr(context_builder, "load_macro_trends", lambda: [])
-    monkeypatch.setattr(context_builder, "load_top_movers_why", lambda: [])
-    monkeypatch.setattr(context_builder, "load_market_coverage", lambda: [])
-    monkeypatch.setattr(context_builder, "load_fx_coverage", lambda: [])
-    monkeypatch.setattr(context_builder, "load_fx_history_summary", lambda: [])
-    monkeypatch.setattr(context_builder, "load_macro_coverage", lambda: [])
-    monkeypatch.setattr(context_builder, "get_latest_dates", lambda: {})
-    monkeypatch.setattr(context_builder, "_load_latest_dates_signature", lambda: ("", "", "", ""))
-
+def test_build_context_handles_empty_payload(monkeypatch):
+    monkeypatch.setattr(context_builder, "run_context_job", lambda include_heavy: {})
     context_builder.clear_context_cache()
+
     result = context_builder.build_context(include_heavy=True, force_refresh=True)
 
     assert "Regime data unavailable" in result
@@ -48,17 +51,27 @@ def test_build_context_handles_empty_sources(monkeypatch):
 
 
 def test_prompt_includes_top_movers_section(monkeypatch):
-    monkeypatch.setattr(context_builder, "load_latest_regime", lambda: [{"risk_regime": "elevated"}])
-    monkeypatch.setattr(context_builder, "load_market_breadth", lambda: [{"k": 1}])
-    monkeypatch.setattr(context_builder, "load_market_stress", lambda: [{"k": 1}])
-    monkeypatch.setattr(context_builder, "load_fx_watchlist", lambda: [{"k": 1}])
-    monkeypatch.setattr(context_builder, "load_macro_trends", lambda: [{"k": 1}])
-    monkeypatch.setattr(context_builder, "load_top_movers_why", lambda: [{"symbol": "AAA", "why_summary": "Reason"}])
-    monkeypatch.setattr(context_builder, "get_latest_dates", lambda: {"market": "2026-03-25"})
-    monkeypatch.setattr(context_builder, "_load_latest_dates_signature", lambda: ("1", "2", "3", "4"))
-
+    monkeypatch.setattr(context_builder, "run_context_job", lambda include_heavy: _base_payload())
     context_builder.clear_context_cache()
+
     result = context_builder.build_context(include_heavy=False, force_refresh=True)
 
     assert "TOP MOVERS + WHY" in result
     assert "AAA" in result
+
+
+def test_get_latest_dates_falls_back_on_failure(monkeypatch):
+    def raise_failure(include_heavy: bool):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(context_builder, "run_context_job", raise_failure)
+    context_builder.clear_context_cache()
+
+    latest = context_builder.get_latest_dates()
+
+    assert latest == {
+        "regime_as_of_date": "",
+        "market_snapshot_date": "",
+        "fx_rate_date": "",
+        "movers_as_of_date": "",
+    }

@@ -1,0 +1,29 @@
+resources:
+  jobs:
+    daily_pipeline_job:
+      name: daily_pipeline_job
+      max_concurrent_runs: 1
+
+      job_clusters:
+        - job_cluster_key: single_node_cluster
+          new_cluster:
+            spark_version: 16.4.x-scala2.12
+            node_type_id: Standard_D4ds_v4
+            num_workers: 0
+            data_security_mode: SINGLE_USER
+            spark_conf:
+              spark.databricks.cluster.profile: singleNode
+              spark.master: local[*]
+            custom_tags:
+              ResourceClass: SingleNode
+
+      tasks:
+        - task_key: build_briefing_context
+          job_cluster_key: single_node_cluster
+          notebook_task:
+            notebook_path: /Repos/<your-user>/<your-repo>/resources/notebooks/build_briefing_context
+            base_parameters:
+              include_heavy: "false"
+
+      queue:
+        enabled: true

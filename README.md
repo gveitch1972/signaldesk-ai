@@ -33,12 +33,14 @@ python3 -m pip install -e .
 
 ## Environment
 
-Create a `.env` file with the required Databricks and Azure OpenAI settings:
+Create a `.env` file with the required Databricks Jobs API and Azure OpenAI settings:
 
 ```env
-DB_HOST=
-DB_HTTP_PATH=
-DB_TOKEN=
+DATABRICKS_HOST=
+DATABRICKS_TOKEN=
+DATABRICKS_JOB_ID=
+DATABRICKS_RUN_TIMEOUT_SECONDS=
+DATABRICKS_POLL_INTERVAL_SECONDS=
 FOUNDRY_ENDPOINT=
 FOUNDRY_API_KEY=
 FOUNDRY_MODEL_DEPLOYMENT=
@@ -51,6 +53,9 @@ ENABLE_HEAVY_CONTEXT_FOR_BRIEFING=
 
 Notes:
 
+- `DATABRICKS_JOB_ID` must reference a Databricks job that uses `job_clusters[].new_cluster` and non-serverless task types (`notebook_task` or `python_wheel_task`).
+- `DATABRICKS_RUN_TIMEOUT_SECONDS` defaults to `900`.
+- `DATABRICKS_POLL_INTERVAL_SECONDS` defaults to `5`.
 - `FOUNDRY_MODEL_DEPLOYMENT` defaults to `gpt-4.1-mini` if omitted.
 - `FOUNDRY_API_VERSION` defaults to `2025-01-01-preview` if omitted.
 - `CONTEXT_CACHE_TTL_SECONDS` defaults to `900` (15 minutes).
@@ -85,9 +90,11 @@ Deploy the app to Azure App Service and use the generated `https://<webapp-name>
    bash startup.sh
    ```
 3. In **Configuration > Application settings**, add:
-   - `DB_HOST`
-   - `DB_HTTP_PATH`
-   - `DB_TOKEN`
+   - `DATABRICKS_HOST`
+   - `DATABRICKS_TOKEN`
+   - `DATABRICKS_JOB_ID`
+   - `DATABRICKS_RUN_TIMEOUT_SECONDS` (optional, defaults to `900`)
+   - `DATABRICKS_POLL_INTERVAL_SECONDS` (optional, defaults to `5`)
    - `FOUNDRY_ENDPOINT`
    - `FOUNDRY_API_KEY`
    - `FOUNDRY_MODEL_DEPLOYMENT` (optional, defaults to `gpt-4.1-mini`)
@@ -105,15 +112,17 @@ export LOCATION="westeurope"
 export APP_SERVICE_PLAN="asp-signaldesk-ai"
 export WEBAPP_NAME="signaldesk-ai-<unique>"
 
-export DB_HOST="..."
-export DB_HTTP_PATH="..."
-export DB_TOKEN="..."
+export DATABRICKS_HOST="..."
+export DATABRICKS_TOKEN="..."
+export DATABRICKS_JOB_ID="123456789012345"
 export FOUNDRY_ENDPOINT="https://<your-resource>.openai.azure.com"
 export FOUNDRY_API_KEY="..."
 
 # Optional overrides:
 # export FOUNDRY_MODEL_DEPLOYMENT="gpt-4.1-mini"
 # export FOUNDRY_API_VERSION="2025-01-01-preview"
+# export DATABRICKS_RUN_TIMEOUT_SECONDS="900"
+# export DATABRICKS_POLL_INTERVAL_SECONDS="5"
 # export APP_SERVICE_SKU="B1"
 # export PYTHON_RUNTIME="PYTHON|3.11"
 
@@ -131,6 +140,44 @@ This script provisions App Service resources (if missing), sets app settings, de
    ```bash
    az webapp log tail --resource-group <rg> --name <webapp-name>
    ```
+
+## Databricks Job Requirements (Non-Serverless)
+
+The app validates job config at runtime and fails fast unless all of the following are true:
+
+- Job defines `job_clusters`.
+- A cluster exists with `job_cluster_key: single_node_cluster`.
+- That cluster uses `new_cluster` single-node settings (`num_workers=0`, `spark.databricks.cluster.profile=singleNode`, `spark.master=local[*]`).
+- Each task uses `job_cluster_key` and task type `notebook_task` or `python_wheel_task`.
+- Tasks do not include `sql_task`, `warehouse_id`, or `compute_key`.
+
+Expected output from the Databricks job task is JSON in `dbutils.notebook.exit(...)` with keys like:
+
+- `latest_dates`
+- `regime`
+- `top_movers`
+- `market_breadth`
+- `market_stress`
+- `fx_watchlist`
+- `macro_trends`
+- `heavy` (optional object containing `market_coverage`, `fx_coverage`, `fx_history_summary`, `macro_coverage`)
+
+## Billing Validation Query
+
+Use this query in Databricks SQL to verify job runs are not billed as serverless:
+
+```sql
+SELECT
+    usage_date,
+    sku_name,
+    usage_unit,
+    usage_quantity,
+    usage_metadata
+FROM system.billing.usage
+WHERE usage_date >= date_sub(current_date(), 7)
+  AND usage_metadata.job_id = '<DATABRICKS_JOB_ID>'
+ORDER BY usage_date DESC;
+```
 
 ## Run Checks
 

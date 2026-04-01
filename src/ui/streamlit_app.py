@@ -1,48 +1,87 @@
+import os
+
+import pandas as pd
 import streamlit as st
 
-from src.config import ENABLE_HEAVY_CONTEXT_FOR_BRIEFING, ENABLE_HEAVY_CONTEXT_FOR_QA
 from src.briefing.chat import ask_question
-from src.briefing.context_builder import build_context, clear_context_cache, get_latest_dates
-from src.briefing.generate_briefing import generate_briefing
-from src.queries.fx import load_fx_watchlist
-from src.queries.macro import load_macro_trends
-from src.queries.regime import load_latest_regime
-from src.queries.top_movers import load_top_movers_why
+from src.briefing.context_builder import (
+    clear_context_cache,
+    get_context_payload,
+    get_latest_dates,
+)
+from src.config import (
+    ENABLE_HEAVY_CONTEXT_FOR_BRIEFING,
+    ENABLE_HEAVY_CONTEXT_FOR_QA,
+    ENABLE_SERVERLESS_COMPUTE,
+    ENABLE_UI_DEBUG,
+)
 
 
 st.set_page_config(page_title="SignalDesk AI", layout="wide")
 
 
-def _safe_rows(loader, fallback=None):
+def _safe_rows(loader, fallback=None, debug_label: str = "", show_debug: bool = False):
     if fallback is None:
         fallback = []
     try:
         rows = loader()
         return rows if rows else fallback
-    except Exception:
+    except Exception as exc:
+        if show_debug:
+            label = debug_label or "data loader"
+            st.error(f"Debug: `{label}` failed with `{type(exc).__name__}`: {exc}")
         return fallback
 
 
+def _fmt_pct(value) -> str:
+    try:
+        return f"{float(value):+.2f}%"
+    except (TypeError, ValueError):
+        return "n/a"
+
+
+def _to_frame(rows) -> pd.DataFrame:
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows)
+
+
 st.title("SignalDesk AI")
-st.caption("AI + Databricks market intelligence with explainable movers")
+st.caption("Databricks lakehouse + Foundry AI for senior market briefings")
 
 with st.sidebar:
-    st.subheader("Cost Controls")
+    st.subheader("Controls")
+    previous_serverless_mode = st.session_state.get(
+        "use_serverless_compute", ENABLE_SERVERLESS_COMPUTE
+    )
+    use_serverless_compute = st.checkbox(
+        "Use Serverless Compute",
+        value=previous_serverless_mode,
+        help="When on, skips single-node compute validation for serverless-backed jobs.",
+    )
+    st.session_state["use_serverless_compute"] = use_serverless_compute
+    os.environ["USE_SERVERLESS_COMPUTE"] = "true" if use_serverless_compute else "false"
+    if previous_serverless_mode != use_serverless_compute:
+        clear_context_cache()
+        st.info("Compute mode changed. Context cache cleared.")
+
+    show_debug = st.checkbox("Debug mode", value=ENABLE_UI_DEBUG)
     include_heavy_for_qa = st.checkbox(
-        "Include heavy context for Q&A",
-        value=ENABLE_HEAVY_CONTEXT_FOR_QA,
-        help="When off, skips coverage/history queries that scan larger datasets.",
+        "Include heavy context for Q&A", value=ENABLE_HEAVY_CONTEXT_FOR_QA
     )
     include_heavy_for_briefing = st.checkbox(
-        "Include heavy context for briefing",
-        value=ENABLE_HEAVY_CONTEXT_FOR_BRIEFING,
-        help="When on, briefing includes coverage/history sections.",
+        "Include heavy context for briefing", value=ENABLE_HEAVY_CONTEXT_FOR_BRIEFING
     )
-    if st.button("Refresh cached context now"):
+    if st.button("Refresh cached context"):
         clear_context_cache()
         st.success("Context cache cleared.")
 
-latest_dates = _safe_rows(get_latest_dates, fallback={})
+latest_dates = _safe_rows(
+    lambda: get_latest_dates(raise_on_error=show_debug),
+    fallback={},
+    debug_label="latest_dates",
+    show_debug=show_debug,
+)
 st.caption(
     "Freshness: "
     f"regime={latest_dates.get('regime_as_of_date') or 'n/a'} | "
@@ -51,80 +90,117 @@ st.caption(
     f"movers={latest_dates.get('movers_as_of_date') or 'n/a'}"
 )
 
-regime_rows = _safe_rows(load_latest_regime, fallback=[{}])
+payload = _safe_rows(
+    lambda: get_context_payload(include_heavy=False, raise_on_error=show_debug),
+    fallback={},
+    debug_label="context_payload_fast",
+    show_debug=show_debug,
+)
+regime_rows = payload.get("regime") or [{}]
 latest_regime = regime_rows[0] if regime_rows else {}
 
-k1, k2, k3, k4 = st.columns(4)
-k1.metric("Risk Regime", str(latest_regime.get("risk_regime", "unknown")))
-k2.metric("Market Stress", str(latest_regime.get("market_stress_symbols", "n/a")))
-k3.metric("FX Stress", str(latest_regime.get("fx_stress_pairs", "n/a")))
-k4.metric(
-    "Macro Balance",
-    f"{latest_regime.get('macro_up_indicators', 'n/a')}↑ / {latest_regime.get('macro_down_indicators', 'n/a')}↓",
-)
+movers_df = _to_frame(payload.get("top_movers") or [])
 
-st.subheader("Top Movers + Why")
-top_movers = _safe_rows(load_top_movers_why, fallback=[])
-if top_movers:
-    st.dataframe(top_movers, use_container_width=True)
-else:
-    st.info("Top movers explainability is unavailable right now.")
+page1, page2 = st.tabs(["Page 1: Signals Snapshot", "Page 2: Senior Briefing"])
 
-left, right = st.columns(2)
-with left:
-    st.subheader("FX Watch")
-    fx_rows = _safe_rows(load_fx_watchlist, fallback=[])
-    if fx_rows:
-        st.dataframe(fx_rows, use_container_width=True)
-    else:
-        st.info("FX watchlist unavailable.")
-
-with right:
-    st.subheader("Macro Pulse")
-    macro_rows = _safe_rows(load_macro_trends, fallback=[])
-    if macro_rows:
-        st.dataframe(macro_rows, use_container_width=True)
-    else:
-        st.info("Macro trends unavailable.")
-
-st.subheader("Ask SignalDesk")
-with st.form("ask_form", clear_on_submit=False):
-    question = st.text_input("Ask a question about the data")
-    ask_submitted = st.form_submit_button("Ask")
-
-if ask_submitted and question.strip():
-    with st.spinner("Thinking..."):
-        answer = ask_question(question, include_heavy=include_heavy_for_qa)
-    st.session_state["answer"] = answer
-
-if "answer" in st.session_state:
-    st.markdown(st.session_state["answer"])
-
-c1, c2, c3 = st.columns([1, 1, 1])
-with c1:
-    if st.button("Generate Briefing"):
-        with st.spinner("Generating briefing..."):
-            st.session_state["briefing"] = generate_briefing(include_heavy=include_heavy_for_briefing)
-
-with c2:
-    if st.button("Regenerate Briefing"):
-        with st.spinner("Regenerating briefing..."):
-            st.session_state["briefing"] = generate_briefing(include_heavy=include_heavy_for_briefing)
-
-with c3:
-    if st.button("Show Raw Context"):
-        st.session_state["context"] = build_context(include_heavy=include_heavy_for_briefing)
-
-if "briefing" in st.session_state:
-    st.subheader("Executive Briefing")
-    st.markdown(st.session_state["briefing"])
-    st.download_button(
-        "Copy Briefing",
-        data=st.session_state["briefing"],
-        file_name="signaldesk_briefing.txt",
-        mime="text/plain",
+with page1:
+    m1, m2, m3 = st.columns(3)
+    m1.metric(
+        "Stress",
+        str(latest_regime.get("risk_regime", "unknown")),
+        _fmt_pct(latest_regime.get("market_avg_day_change_pct")),
+    )
+    m2.metric(
+        "FX",
+        str(latest_regime.get("fx_stress_pairs", "n/a")),
+        _fmt_pct(latest_regime.get("fx_avg_daily_change_pct")),
+    )
+    m3.metric(
+        "Macro",
+        f"{latest_regime.get('macro_up_indicators', 'n/a')}↑/{latest_regime.get('macro_down_indicators', 'n/a')}↓",
+        _fmt_pct(latest_regime.get("macro_avg_period_change_pct")),
     )
 
-if "context" in st.session_state:
-    st.subheader("Raw Context")
-    st.code(st.session_state["context"])
+    st.subheader("Cross-Asset Movers")
+    if not movers_df.empty and {"symbol", "return_30d_pct"}.issubset(movers_df.columns):
+        chart_df = movers_df[["symbol", "return_30d_pct"]].copy()
+        chart_df["return_30d_pct"] = pd.to_numeric(
+            chart_df["return_30d_pct"], errors="coerce"
+        )
+        chart_df = chart_df.dropna().sort_values("return_30d_pct")
+        if not chart_df.empty:
+            st.bar_chart(chart_df.set_index("symbol"))
+        else:
+            st.info("Chart unavailable: return values are missing.")
+    else:
+        st.info("Chart unavailable: top movers data is missing.")
+
+    st.subheader("Top Movers Table")
+    if not movers_df.empty:
+        preferred_cols = [
+            "symbol",
+            "latest_price",
+            "day_change_pct",
+            "return_30d_pct",
+            "stress_flag",
+            "why_summary",
+        ]
+        table_cols = [col for col in preferred_cols if col in movers_df.columns]
+        st.dataframe(movers_df[table_cols] if table_cols else movers_df, use_container_width=True)
+    else:
+        st.info("Top movers table unavailable right now.")
+
+with page2:
+    st.subheader("Prompt")
+    default_prompt = (
+        "Write a concise senior market briefing with sections for: "
+        "(1) what changed, (2) why it matters, (3) what to watch next."
+    )
+    prompt = st.text_area(
+        "Briefing instruction",
+        value=st.session_state.get("briefing_prompt", default_prompt),
+        height=120,
+    )
+    st.session_state["briefing_prompt"] = prompt
+
+    b1, b2 = st.columns([1, 3])
+    with b1:
+        if st.button("Generate AI Briefing", use_container_width=True):
+            with st.spinner("Generating briefing..."):
+                st.session_state["briefing"] = ask_question(
+                    prompt, include_heavy=include_heavy_for_briefing
+                )
+
+    with b2:
+        st.caption("Use this as the daily senior-ready narrative. Edit the prompt to shift tone or focus.")
+
+    st.subheader("AI-Generated Briefing")
+    if "briefing" in st.session_state:
+        st.markdown(st.session_state["briefing"])
+        st.download_button(
+            "Download Briefing",
+            data=st.session_state["briefing"],
+            file_name="signaldesk_briefing.txt",
+            mime="text/plain",
+        )
+    else:
+        st.info("Generate a briefing to populate this section.")
+
+    st.subheader("Explain This Spike")
+    if not movers_df.empty and "symbol" in movers_df.columns:
+        symbols = [str(s) for s in movers_df["symbol"].dropna().tolist()]
+        selected_symbol = st.selectbox("Pick a symbol", symbols)
+        if st.button("Explain this spike"):
+            with st.spinner("Analyzing spike..."):
+                st.session_state["spike_explanation"] = ask_question(
+                    (
+                        f"Explain the latest spike for {selected_symbol}. "
+                        "Use concrete datapoints, likely drivers, and key risks to monitor."
+                    ),
+                    include_heavy=include_heavy_for_qa,
+                )
+    else:
+        st.info("No mover symbols available for spike analysis.")
+
+    if "spike_explanation" in st.session_state:
+        st.markdown(st.session_state["spike_explanation"])
