@@ -1,7 +1,10 @@
+import ssl
+
 import pytest
 
 import src.databricks_jobs_client as databricks_jobs_client
 from src.databricks_jobs_client import (
+    _build_ssl_context,
     _resolve_output_run_id,
     ensure_non_serverless_job_configuration,
     validate_non_serverless_job_settings,
@@ -96,3 +99,30 @@ def test_serverless_mode_skips_non_serverless_validation(monkeypatch):
 
     monkeypatch.setattr(databricks_jobs_client, "get_job_settings", fail_if_called)
     ensure_non_serverless_job_configuration()
+
+
+def test_build_ssl_context_skips_verification_when_enabled(monkeypatch):
+    monkeypatch.setattr(databricks_jobs_client, "DATABRICKS_SKIP_SSL_VERIFY", True)
+    monkeypatch.setattr(databricks_jobs_client, "DATABRICKS_CA_BUNDLE", "")
+
+    ctx = _build_ssl_context()
+
+    assert ctx.verify_mode == ssl.CERT_NONE
+    assert ctx.check_hostname is False
+
+
+def test_build_ssl_context_uses_custom_ca_bundle(monkeypatch):
+    monkeypatch.setattr(databricks_jobs_client, "DATABRICKS_SKIP_SSL_VERIFY", False)
+    monkeypatch.setattr(databricks_jobs_client, "DATABRICKS_CA_BUNDLE", "/tmp/custom-ca.pem")
+
+    seen = {}
+
+    def fake_create_default_context(cafile=None):
+        seen["cafile"] = cafile
+        return ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+
+    monkeypatch.setattr(databricks_jobs_client.ssl, "create_default_context", fake_create_default_context)
+
+    _build_ssl_context()
+
+    assert seen["cafile"] == "/tmp/custom-ca.pem"

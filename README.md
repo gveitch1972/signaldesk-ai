@@ -2,6 +2,26 @@
 
 SignalDesk AI is a Python 3 app that builds market briefings and question-answering flows from Databricks data and Azure OpenAI.
 
+## GitHub About & Topics
+
+Use the following repository metadata for GitHub's **About** section.
+
+Recommended description:
+
+`Internal market intelligence app that combines Databricks signals with Azure OpenAI for production Q&A, monitoring, and executive briefings.`
+
+Alternative (ops/monitoring-first):
+
+`Production monitoring workspace for market and risk signals from Databricks, with Azure OpenAI Q&A and briefing support for internal teams.`
+
+Alternative (AI-briefing-first):
+
+`Enterprise AI briefing copilot that turns Databricks market signals into executive updates, analyst Q&A, and explainable top-mover narratives.`
+
+Recommended topics (ordered by relevance):
+
+`market-intelligence, risk-monitoring, executive-briefing, databricks, azure-openai, financial-data, question-answering, llm, market-analytics, streamlit, python, enterprise-ai`
+
 ## What It Does
 
 The app now combines:
@@ -41,6 +61,8 @@ DATABRICKS_TOKEN=
 DATABRICKS_JOB_ID=
 DATABRICKS_RUN_TIMEOUT_SECONDS=
 DATABRICKS_POLL_INTERVAL_SECONDS=
+DATABRICKS_CA_BUNDLE=
+DATABRICKS_SKIP_SSL_VERIFY=
 FOUNDRY_ENDPOINT=
 FOUNDRY_API_KEY=
 FOUNDRY_MODEL_DEPLOYMENT=
@@ -56,6 +78,9 @@ Notes:
 - `DATABRICKS_JOB_ID` must reference a Databricks job that uses `job_clusters[].new_cluster` and non-serverless task types (`notebook_task` or `python_wheel_task`).
 - `DATABRICKS_RUN_TIMEOUT_SECONDS` defaults to `900`.
 - `DATABRICKS_POLL_INTERVAL_SECONDS` defaults to `5`.
+- `DATABRICKS_CA_BUNDLE` is optional and should point to your corporate/root CA PEM file when TLS inspection is in place.
+- `DATABRICKS_SKIP_SSL_VERIFY` defaults to `false`; set to `true` only for temporary local troubleshooting.
+- `REQUESTS_CA_BUNDLE` or `SSL_CERT_FILE` are also honored as fallback CA bundle env vars.
 - `FOUNDRY_MODEL_DEPLOYMENT` defaults to `gpt-4.1-mini` if omitted.
 - `FOUNDRY_API_VERSION` defaults to `2025-01-01-preview` if omitted.
 - `CONTEXT_CACHE_TTL_SECONDS` defaults to `900` (15 minutes).
@@ -123,6 +148,8 @@ export FOUNDRY_API_KEY="..."
 # export FOUNDRY_API_VERSION="2025-01-01-preview"
 # export DATABRICKS_RUN_TIMEOUT_SECONDS="900"
 # export DATABRICKS_POLL_INTERVAL_SECONDS="5"
+# export DATABRICKS_CA_BUNDLE="/path/to/corp-root-ca.pem"
+# export DATABRICKS_SKIP_SSL_VERIFY="false"
 # export APP_SERVICE_SKU="B1"
 # export PYTHON_RUNTIME="PYTHON|3.11"
 

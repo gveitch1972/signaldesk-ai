@@ -1,5 +1,7 @@
 import json
+import logging
 import os
+import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -7,10 +9,12 @@ import urllib.request
 from typing import Any
 
 from src.config import (
+    DATABRICKS_CA_BUNDLE,
     DATABRICKS_HOST,
     DATABRICKS_JOB_ID,
     DATABRICKS_POLL_INTERVAL_SECONDS,
     DATABRICKS_RUN_TIMEOUT_SECONDS,
+    DATABRICKS_SKIP_SSL_VERIFY,
     DATABRICKS_TOKEN,
     ENABLE_SERVERLESS_COMPUTE,
 )
@@ -19,6 +23,8 @@ _ALLOWED_TASK_TYPES = {"notebook_task", "python_wheel_task", "spark_python_task"
 _FORBIDDEN_TASK_KEYS = {"sql_task", "warehouse_id", "compute_key"}
 _VALIDATED_JOB_ID: str | None = None
 _CONTEXT_TASK_KEY = "build_briefing_context"
+_INSECURE_SSL_WARNING_EMITTED = False
+logger = logging.getLogger(__name__)
 
 
 def _as_bool(value: str, default: bool) -> bool:
@@ -44,6 +50,55 @@ def _build_base_url() -> str:
     return f"https://{host}"
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    return _as_bool(os.getenv(name), default)
+
+
+def _effective_ca_bundle() -> str:
+    candidate = (
+        os.getenv("DATABRICKS_CA_BUNDLE")
+        or DATABRICKS_CA_BUNDLE
+        or os.getenv("REQUESTS_CA_BUNDLE", "")
+        or os.getenv("SSL_CERT_FILE", "")
+    ).strip()
+    if not candidate:
+        return ""
+    return os.path.abspath(os.path.expanduser(candidate))
+
+
+def _build_ssl_context() -> ssl.SSLContext:
+    global _INSECURE_SSL_WARNING_EMITTED
+
+    skip_verify = _env_bool("DATABRICKS_SKIP_SSL_VERIFY", DATABRICKS_SKIP_SSL_VERIFY)
+    if skip_verify:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        if not _INSECURE_SSL_WARNING_EMITTED:
+            logger.warning(
+                "DATABRICKS_SKIP_SSL_VERIFY=true disables TLS certificate verification. "
+                "Use only for local troubleshooting."
+            )
+            _INSECURE_SSL_WARNING_EMITTED = True
+        return ctx
+
+    ca_bundle = _effective_ca_bundle()
+    if ca_bundle:
+        if not os.path.isfile(ca_bundle):
+            raise RuntimeError(
+                f"TLS CA bundle file not found at '{ca_bundle}'. "
+                "Set DATABRICKS_CA_BUNDLE to a valid PEM path."
+            )
+        try:
+            return ssl.create_default_context(cafile=ca_bundle)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to load TLS CA bundle at '{ca_bundle}': {exc}"
+            ) from exc
+
+    return ssl.create_default_context()
+
+
 def _api_request(method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
     token = _require(DATABRICKS_TOKEN, "DATABRICKS_TOKEN")
     url = f"{_build_base_url()}{path}"
@@ -57,7 +112,7 @@ def _api_request(method: str, path: str, payload: dict[str, Any] | None = None) 
 
     req = urllib.request.Request(url=url, data=body, headers=headers, method=method.upper())
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=30, context=_build_ssl_context()) as resp:
             raw = resp.read().decode("utf-8")
             return json.loads(raw) if raw else {}
     except urllib.error.HTTPError as exc:

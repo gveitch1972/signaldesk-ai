@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from src.briefing.chat import ask_question
+from src.disruption.signals import DISRUPTION_THEMES, SCRAPED_DATE
 from src.briefing.context_builder import (
     clear_context_cache,
     get_context_payload,
@@ -33,21 +34,29 @@ def _safe_rows(loader, fallback=None, debug_label: str = "", show_debug: bool = 
         return fallback
 
 
-def _fmt_pct(value) -> str:
-    try:
-        return f"{float(value):+.2f}%"
-    except (TypeError, ValueError):
-        return "n/a"
-
-
 def _to_frame(rows) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame()
     return pd.DataFrame(rows)
 
 
+def _append_chat(role: str, content: str) -> None:
+    history = st.session_state.setdefault("chat_history", [])
+    history.append({"role": role, "content": content})
+
+
+def _render_chat_history() -> None:
+    history = st.session_state.get("chat_history", [])
+    if not history:
+        st.info("No Q&A history yet. Ask a question to start a running thread.")
+        return
+    for item in history:
+        with st.chat_message(item.get("role", "assistant")):
+            st.markdown(item.get("content", ""))
+
+
 st.title("SignalDesk AI")
-st.caption("Databricks lakehouse + Foundry AI for senior market briefings")
+st.caption("Databricks lakehouse + Foundry AI for market monitoring and executive briefing")
 
 with st.sidebar:
     st.subheader("Controls")
@@ -75,6 +84,9 @@ with st.sidebar:
     if st.button("Refresh cached context"):
         clear_context_cache()
         st.success("Context cache cleared.")
+    if st.button("Clear chat history"):
+        st.session_state["chat_history"] = []
+        st.success("Chat history cleared.")
 
 latest_dates = _safe_rows(
     lambda: get_latest_dates(raise_on_error=show_debug),
@@ -100,107 +112,123 @@ regime_rows = payload.get("regime") or [{}]
 latest_regime = regime_rows[0] if regime_rows else {}
 
 movers_df = _to_frame(payload.get("top_movers") or [])
+fx_df = _to_frame(payload.get("fx_watchlist") or [])
+macro_df = _to_frame(payload.get("macro_trends") or [])
 
-page1, page2 = st.tabs(["Page 1: Signals Snapshot", "Page 2: Senior Briefing"])
+k1, k2, k3, k4 = st.columns(4)
+k1.metric("Risk Regime", str(latest_regime.get("risk_regime", "unknown")))
+k2.metric("Market Stress", str(latest_regime.get("market_stress_symbols", "n/a")))
+k3.metric("FX Stress", str(latest_regime.get("fx_stress_pairs", "n/a")))
+k4.metric(
+    "Macro Balance",
+    f"{latest_regime.get('macro_up_indicators', 'n/a')}↑ / {latest_regime.get('macro_down_indicators', 'n/a')}↓",
+)
 
-with page1:
-    m1, m2, m3 = st.columns(3)
-    m1.metric(
-        "Stress",
-        str(latest_regime.get("risk_regime", "unknown")),
-        _fmt_pct(latest_regime.get("market_avg_day_change_pct")),
-    )
-    m2.metric(
-        "FX",
-        str(latest_regime.get("fx_stress_pairs", "n/a")),
-        _fmt_pct(latest_regime.get("fx_avg_daily_change_pct")),
-    )
-    m3.metric(
-        "Macro",
-        f"{latest_regime.get('macro_up_indicators', 'n/a')}↑/{latest_regime.get('macro_down_indicators', 'n/a')}↓",
-        _fmt_pct(latest_regime.get("macro_avg_period_change_pct")),
-    )
+st.subheader("Top Movers")
+if not movers_df.empty:
+    preferred_cols = [
+        "symbol",
+        "latest_price",
+        "day_change_pct",
+        "return_30d_pct",
+        "stress_flag",
+        "why_summary",
+    ]
+    table_cols = [col for col in preferred_cols if col in movers_df.columns]
+    st.dataframe(movers_df[table_cols] if table_cols else movers_df, use_container_width=True)
+else:
+    st.info("Top movers explainability is unavailable right now.")
 
-    st.subheader("Cross-Asset Movers")
-    if not movers_df.empty and {"symbol", "return_30d_pct"}.issubset(movers_df.columns):
-        chart_df = movers_df[["symbol", "return_30d_pct"]].copy()
-        chart_df["return_30d_pct"] = pd.to_numeric(
-            chart_df["return_30d_pct"], errors="coerce"
-        )
-        chart_df = chart_df.dropna().sort_values("return_30d_pct")
-        if not chart_df.empty:
-            st.bar_chart(chart_df.set_index("symbol"))
-        else:
-            st.info("Chart unavailable: return values are missing.")
+left, right = st.columns(2)
+with left:
+    st.subheader("FX Watch")
+    if fx_df.empty:
+        st.info("FX watchlist unavailable.")
     else:
-        st.info("Chart unavailable: top movers data is missing.")
+        st.dataframe(fx_df, use_container_width=True)
 
-    st.subheader("Top Movers Table")
-    if not movers_df.empty:
-        preferred_cols = [
-            "symbol",
-            "latest_price",
-            "day_change_pct",
-            "return_30d_pct",
-            "stress_flag",
-            "why_summary",
-        ]
-        table_cols = [col for col in preferred_cols if col in movers_df.columns]
-        st.dataframe(movers_df[table_cols] if table_cols else movers_df, use_container_width=True)
+with right:
+    st.subheader("Macro Pulse")
+    if macro_df.empty:
+        st.info("Macro trends unavailable.")
     else:
-        st.info("Top movers table unavailable right now.")
+        st.dataframe(macro_df, use_container_width=True)
 
-with page2:
-    st.subheader("Prompt")
-    default_prompt = (
-        "Write a concise senior market briefing with sections for: "
-        "(1) what changed, (2) why it matters, (3) what to watch next."
-    )
-    prompt = st.text_area(
-        "Briefing instruction",
-        value=st.session_state.get("briefing_prompt", default_prompt),
-        height=120,
-    )
-    st.session_state["briefing_prompt"] = prompt
+st.subheader("Disruption Intelligence")
+st.caption(f"Key themes from EY, Deloitte, McKinsey & KPMG — sourced {SCRAPED_DATE}")
 
-    b1, b2 = st.columns([1, 3])
-    with b1:
-        if st.button("Generate AI Briefing", use_container_width=True):
-            with st.spinner("Generating briefing..."):
-                st.session_state["briefing"] = ask_question(
-                    prompt, include_heavy=include_heavy_for_briefing
-                )
+for theme in DISRUPTION_THEMES:
+    with st.expander(f"{theme['icon']}  {theme['theme']}"):
+        st.markdown(f"_{theme['summary']}_")
+        st.divider()
+        cols = st.columns(len(theme["firms"]))
+        for col, (firm, points) in zip(cols, theme["firms"].items()):
+            with col:
+                st.markdown(f"**{firm}**")
+                for point in points:
+                    st.markdown(f"- {point}")
 
-    with b2:
-        st.caption("Use this as the daily senior-ready narrative. Edit the prompt to shift tone or focus.")
+st.subheader("Ask SignalDesk")
+with st.form("ask_form", clear_on_submit=False):
+    question = st.text_input("Ask a question about the data")
+    ask_submitted = st.form_submit_button("Ask")
 
-    st.subheader("AI-Generated Briefing")
-    if "briefing" in st.session_state:
-        st.markdown(st.session_state["briefing"])
-        st.download_button(
-            "Download Briefing",
-            data=st.session_state["briefing"],
-            file_name="signaldesk_briefing.txt",
-            mime="text/plain",
-        )
-    else:
-        st.info("Generate a briefing to populate this section.")
+if ask_submitted and question.strip():
+    _append_chat("user", question.strip())
+    with st.spinner("Thinking..."):
+        answer = ask_question(question.strip(), include_heavy=include_heavy_for_qa)
+    _append_chat("assistant", answer)
 
-    st.subheader("Explain This Spike")
+_render_chat_history()
+
+st.subheader("Executive Briefing")
+default_prompt = (
+    "Write a concise senior market briefing with sections for: "
+    "(1) what changed, (2) why it matters, (3) what to watch next."
+)
+briefing_prompt = st.text_area(
+    "Briefing instruction",
+    value=st.session_state.get("briefing_prompt", default_prompt),
+    height=110,
+)
+st.session_state["briefing_prompt"] = briefing_prompt
+
+b1, b2, b3 = st.columns([1, 1, 2])
+with b1:
+    if st.button("Generate Briefing"):
+        with st.spinner("Generating briefing..."):
+            st.session_state["briefing"] = ask_question(
+                briefing_prompt, include_heavy=include_heavy_for_briefing
+            )
+with b2:
+    if st.button("Regenerate Briefing"):
+        with st.spinner("Regenerating briefing..."):
+            st.session_state["briefing"] = ask_question(
+                briefing_prompt, include_heavy=include_heavy_for_briefing
+            )
+with b3:
     if not movers_df.empty and "symbol" in movers_df.columns:
         symbols = [str(s) for s in movers_df["symbol"].dropna().tolist()]
-        selected_symbol = st.selectbox("Pick a symbol", symbols)
-        if st.button("Explain this spike"):
+        selected_symbol = st.selectbox("Explain This Spike", symbols, key="spike_symbol")
+        if st.button("Analyze Selected Symbol"):
+            user_prompt = (
+                f"Explain the latest spike for {selected_symbol}. "
+                "Use concrete datapoints, likely drivers, and key risks to monitor."
+            )
+            _append_chat("user", user_prompt)
             with st.spinner("Analyzing spike..."):
-                st.session_state["spike_explanation"] = ask_question(
-                    (
-                        f"Explain the latest spike for {selected_symbol}. "
-                        "Use concrete datapoints, likely drivers, and key risks to monitor."
-                    ),
-                    include_heavy=include_heavy_for_qa,
+                spike_response = ask_question(
+                    user_prompt, include_heavy=include_heavy_for_qa
                 )
-    else:
-        st.info("No mover symbols available for spike analysis.")
+            _append_chat("assistant", spike_response)
 
-    if "spike_explanation" in st.session_state:
-        st.markdown(st.session_state["spike_explanation"])
+if "briefing" in st.session_state:
+    st.markdown(st.session_state["briefing"])
+    st.download_button(
+        "Download Briefing",
+        data=st.session_state["briefing"],
+        file_name="signaldesk_briefing.txt",
+        mime="text/plain",
+    )
+else:
+    st.info("Generate a briefing to populate this section.")
